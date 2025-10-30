@@ -1,8 +1,9 @@
-# voronoi_art_cli_posterize.py
-# Requirements: pip install numpy opencv-python scipy svgwrite cairosvg
+# voronoi_art.py
+# Adaptive Voronoi vectorization with optional posterization
 
-import cv2, numpy as np, random, svgwrite, cairosvg, argparse
+import cv2, numpy as np, random, svgwrite, cairosvg, argparse, os
 from scipy.spatial import Voronoi
+from pathlib import Path
 
 
 def posterize_image(img, n_colors):
@@ -16,8 +17,8 @@ def posterize_image(img, n_colors):
 
 def main():
     p = argparse.ArgumentParser(description="Adaptive Voronoi vectorization with optional posterization")
-    p.add_argument("--input", required=True, help="Input image path")
-    p.add_argument("--output", required=False, default="output", help="Output basename (no extension)")
+    p.add_argument("--input", required=True, help="Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.)")
+    p.add_argument("--output", required=False, default=None, help="Output basename (no extension). Defaults to input filename")
     p.add_argument("--points", type=int, default=6000, help="Number of Voronoi sites")
     p.add_argument("--strength", type=float, default=3.0, help="Effect of color variance on density")
     p.add_argument("--blur", type=int, default=2, help="Smoothness of variance map")
@@ -27,13 +28,19 @@ def main():
     args = p.parse_args()
 
     IMG_PATH = args.input
+
+    # Default output name based on input filename
+    if args.output is None:
+        input_path = Path(IMG_PATH)
+        args.output = input_path.stem + "_voronoi"
+
     OUTPUT_SVG = args.output + ".svg"
     OUTPUT_PNG = args.output + ".png"
 
-    # Load image
-    img = cv2.imread(IMG_PATH)
+    # Load image - OpenCV supports PNG, JPG, JPEG, BMP, TIFF, WebP, and more
+    img = cv2.imread(IMG_PATH, cv2.IMREAD_COLOR)
     if img is None:
-        raise FileNotFoundError(f"Image not found: {IMG_PATH}")
+        raise FileNotFoundError(f"Image not found or unsupported format: {IMG_PATH}")
 
     if args.posterize > 1:
         img = posterize_image(img, args.posterize)

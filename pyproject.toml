@@ -1,0 +1,35 @@
+[tool.poetry]
+name = "voronoi-art"
+version = "0.1.0"
+description = "Create artistic Voronoi diagram renderings from images with adaptive sampling and posterization effects"
+authors = ["Maxime <maxime@example.com>"]
+readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/fritzip/voronoi-art"
+repository = "https://github.com/fritzip/voronoi-art"
+keywords = ["voronoi", "art", "image-processing", "vectorization", "svg"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Artistic Software",
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+numpy = "^1.24.0"
+opencv-python = "^4.8.0"
+scipy = "^1.10.0"
+svgwrite = "^1.4.3"
+cairosvg = "^2.7.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+
+[tool.poetry.scripts]
+voronoi-art = "voronoi_art:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
