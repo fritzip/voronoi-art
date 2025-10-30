@@ -78,23 +78,23 @@ def preview_mode(img_path):
     if img is None:
         raise FileNotFoundError(f"Image not found or unsupported format: {img_path}")
 
-    # Resize if too large for display
     h, w = img.shape[:2]
+
+    # For display only - we'll generate on full image but display scaled
     max_display = 800
     if h > max_display or w > max_display:
-        scale = max_display / max(h, w)
-        display_h, display_w = int(h * scale), int(w * scale)
-        display_img = cv2.resize(img, (display_w, display_h))
+        scale_factor = max_display / max(h, w)
+        display_h, display_w = int(h * scale_factor), int(w * scale_factor)
     else:
-        display_img = img.copy()
         display_h, display_w = h, w
+        scale_factor = 1.0
 
     # Create window
     window_name = "Voronoi Art Preview - Press 'q' to quit, ENTER to save"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, display_w, display_h + 200)
 
-    # Parameters (strength: 0-10 exponential, posterize: 0-10 powers of 2, scale: 1-10, seed: 0-100)
+    # Parameters (strength: 0-10 exponential, posterize: 0-10 powers of 2, scale: 1-10, seed: 0-20)
     params = {"points": 6000, "strength": 1, "blur": 2, "edges": 0, "posterize": 0, "scale": 1, "seed": 0}
 
     # Create trackbars
@@ -104,7 +104,7 @@ def preview_mode(img_path):
     cv2.createTrackbar("Edges (on/off)", window_name, params["edges"], 1, lambda x: None)
     cv2.createTrackbar("Posterize", window_name, params["posterize"], 10, lambda x: None)
     cv2.createTrackbar("Scale", window_name, params["scale"], 10, lambda x: None)
-    cv2.createTrackbar("Seed", window_name, params["seed"], 100, lambda x: None)
+    cv2.createTrackbar("Seed", window_name, params["seed"], 20, lambda x: None)
 
     print("\n" + "=" * 60)
     print("VORONOI ART PREVIEW MODE")
@@ -116,13 +116,13 @@ def preview_mode(img_path):
     print("  • Edges: Toggle cell borders (0=off, 1=on)")
     print("  • Posterize: Color reduction (0=off, 1=2 colors, 2=4, 3=8, ..., 10=1024)")
     print("  • Scale: Output size multiplier (1-10)")
-    print("  • Seed: Random seed for reproducible results (0-100)")
+    print("  • Seed: Random seed for reproducible results (0-20)")
     print("\nPress ENTER to save with current settings")
     print("Press 'q' to quit without saving")
     print("=" * 60 + "\n")
 
     last_params = params.copy()
-    result = display_img.copy()
+    result = None
     needs_update = True
 
     while True:
@@ -145,11 +145,10 @@ def preview_mode(img_path):
             # Convert strength from 0-10 scale using exponential: e^strength / e^10
             # This gives a range from ~0 (e^0/e^10 ≈ 0.000045) to 1.0 (e^10/e^10)
             # with more fine control at lower values
-            max_strength_exp = 10
             if params["strength"] == 0:
                 actual_strength = 0
             else:
-                actual_strength = np.exp(params["strength"]) / np.exp(max_strength_exp) * 100  # Scale to 0-100
+                actual_strength = np.exp(params["strength"]) / np.exp(10) * 100  # Scale to 0-100
 
             # Convert posterize slider (0-10) to power of 2
             actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
@@ -160,8 +159,9 @@ def preview_mode(img_path):
                 f"posterize={actual_posterize}, scale={params['scale']}x, seed={params['seed']}"
             )
 
+            # Generate on FULL resolution image (same as final output)
             result = generate_voronoi_image(
-                display_img,
+                img,
                 points=params["points"],
                 strength=actual_strength,
                 blur=params["blur"],
@@ -169,10 +169,18 @@ def preview_mode(img_path):
                 posterize=actual_posterize,
                 seed=params["seed"],
             )
+
+            # Resize result for display if needed
+            if scale_factor != 1.0:
+                result_display = cv2.resize(result, (display_w, display_h))
+            else:
+                result_display = result
+
             needs_update = False
 
         # Display
-        cv2.imshow(window_name, result)
+        if result is not None:
+            cv2.imshow(window_name, result_display)
 
         # Handle keyboard
         key = cv2.waitKey(100) & 0xFF
@@ -263,7 +271,7 @@ def main():
     p.add_argument("--edges", action="store_true", help="Show Voronoi borders (debug)")
     p.add_argument("--posterize", type=int, default=0, help="Posterize colors (0=off, e.g., 8,16,32)")
     p.add_argument("--scale", type=float, default=1.0, help="Size multiplier relative to input (e.g. 2.0 = double size)")
-    p.add_argument("--seed", type=int, default=None, help="Random seed for reproducible results (0-100)")
+    p.add_argument("--seed", type=int, default=None, help="Random seed for reproducible results (0-20)")
     args = p.parse_args()
 
     IMG_PATH = args.input
