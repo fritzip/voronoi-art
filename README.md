@@ -4,6 +4,7 @@ Transform images into artistic Voronoi diagrams with adaptive sampling and poste
 
 ## Features
 
+- **Interactive Preview Mode**: Real-time parameter adjustment with instant visual feedback
 - **Adaptive Sampling**: Places more Voronoi sites in high-detail areas using variance-based density
 - **Posterization**: Optional color reduction for artistic effects
 - **Vector Output**: Generates crisp SVG files that scale infinitely
@@ -40,6 +41,25 @@ voronoi-art --input ~/pictures/photo.jpg
 
 ## Usage
 
+### Interactive Preview Mode (Recommended)
+
+```bash
+# Launch interactive preview with real-time parameter adjustment
+voronoi-art --input photo.jpg --preview
+
+# Adjust sliders in the GUI window:
+#   - Points: Change number of Voronoi sites (0-100,000)
+#   - Strength: Control adaptive sampling intensity (0-10, exponential scale)
+#              0=off, 5≈0.67, 10=100 (uses e^x/e^10 scaling for fine control)
+#   - Blur: Adjust variance map smoothness (1-20)
+#   - Edges: Toggle cell borders on/off (0 or 1)
+#   - Posterize: Change color quantization (0-10: 0=off, 1=2 colors, 2=4, 3=8, ..., 10=1024)
+#   - Scale x0.1: Output size multiplier (1=0.1x, 10=1.0x, 50=5.0x, 100=10.0x)
+#   - Seed: Random seed for reproducible results (0-100)
+# Press ENTER to save with current settings
+# Press 'q' to quit without saving
+```
+
 ### Basic Usage
 
 ```bash
@@ -75,11 +95,13 @@ voronoi-art \
 | ------------- | ------ | ----------------- | ----------------------------------------------------------------- |
 | `--input`     | string | _required_        | Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.) |
 | `--output`    | string | `{input}_voronoi` | Output basename without extension                                 |
+| `--preview`   | flag   | off               | Launch interactive preview mode with real-time adjustments        |
 | `--points`    | int    | 6000              | Number of Voronoi sites (more = finer detail)                     |
 | `--strength`  | float  | 3.0               | Adaptive sampling intensity (higher = more detail emphasis)       |
 | `--blur`      | int    | 2                 | Variance map smoothness (lower = sharper transitions)             |
 | `--posterize` | int    | 0                 | Color levels (0=off, 8/16/32 for artistic effects)                |
 | `--scale`     | float  | 1.0               | Output size multiplier (2.0 = double resolution)                  |
+| `--seed`      | int    | None              | Random seed for reproducible results (0-100)                      |
 | `--edges`     | flag   | off               | Show Voronoi cell borders for debugging                           |
 
 ## Examples
@@ -121,11 +143,3 @@ MIT License - feel free to use in your own projects!
 ## Contributing
 
 Contributions welcome! Please open an issue or submit a pull request.
-
-## Tips
-
-- Start with default settings, then adjust `--points` and `--strength`
-- Use `--posterize 8` or `16` for pop art effects
-- Add `--edges` to understand how the algorithm samples your image
-- Increase `--scale` for high-resolution prints without adding more points
-- Lower `--points` (500-1500) for abstract, low-poly style art
