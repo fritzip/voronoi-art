@@ -31,9 +31,8 @@ poetry run voronoi-art --input image.jpg
 ### System Installation
 
 ```bash
-# Install globally with Poetry
-poetry build
-pip install dist/voronoi_art-*.whl
+# Install globally to system with pipx (recommended for CLI tools)
+pipx install .
 
 # Now use from anywhere
 voronoi-art --input ~/pictures/photo.jpg
