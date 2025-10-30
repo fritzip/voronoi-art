@@ -17,8 +17,8 @@ def posterize_image(img, n_colors):
     return quantized.astype(np.uint8)
 
 
-def generate_voronoi_image(img, points, strength, blur, edges, posterize, seed=None):
-    """Generate a Voronoi rendering of the image with given parameters."""
+def compute_voronoi_data(img, points, strength, blur, posterize, seed=None):
+    """Compute Voronoi tessellation data. Returns (vor, chosen, working_img)."""
     # Set random seed if provided
     if seed is not None:
         np.random.seed(seed)
@@ -26,7 +26,6 @@ def generate_voronoi_image(img, points, strength, blur, edges, posterize, seed=N
     # Apply posterization if needed
     working_img = posterize_image(img.copy(), posterize) if posterize > 1 else img.copy()
 
-    h, w = working_img.shape[:2]
     gray = cv2.cvtColor(working_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
     # Variance map
@@ -44,23 +43,69 @@ def generate_voronoi_image(img, points, strength, blur, edges, posterize, seed=N
     # Voronoi
     vor = Voronoi(chosen)
 
-    # Create output image
-    output = np.zeros_like(working_img)
+    return vor, chosen, working_img
+
+
+def process_voronoi_regions(vor, chosen, working_img):
+    """Process Voronoi regions and yield (polygon, color) for valid regions."""
+    h, w = working_img.shape[:2]
 
     for i, region_idx in enumerate(vor.point_region):
         region = vor.regions[region_idx]
-        if not region or -1 in region:
+        if not region:
             continue
-        polygon = [vor.vertices[j] for j in region if 0 <= j < len(vor.vertices)]
-        if len(polygon) < 3:
-            continue
+
+        # For infinite regions, filter out -1 vertices
+        is_infinite = -1 in region
+        if is_infinite:
+            valid_vertices = [j for j in region if j != -1]
+            if len(valid_vertices) < 3:
+                continue
+            polygon = [vor.vertices[j] for j in valid_vertices]
+        else:
+            polygon = [vor.vertices[j] for j in region]
+            if len(polygon) < 3:
+                continue
 
         # Get color from center point
         px, py = map(int, chosen[i])
         px, py = np.clip(px, 0, w - 1), np.clip(py, 0, h - 1)
-        color = working_img[int(py), int(px)]
 
-        # Draw filled polygon
+        # For infinite cells, sample color from the nearest edge
+        if is_infinite:
+            # Find which edge is closest
+            dist_to_left = px
+            dist_to_right = w - 1 - px
+            dist_to_top = py
+            dist_to_bottom = h - 1 - py
+
+            min_dist = min(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
+
+            # Sample from that edge
+            if min_dist == dist_to_left:
+                color = working_img[py, 0]  # Left edge
+            elif min_dist == dist_to_right:
+                color = working_img[py, w - 1]  # Right edge
+            elif min_dist == dist_to_top:
+                color = working_img[0, px]  # Top edge
+            else:
+                color = working_img[h - 1, px]  # Bottom edge
+        else:
+            color = working_img[int(py), int(px)]
+
+        yield polygon, color
+
+
+def generate_voronoi_image(img, points, strength, blur, edges, posterize, seed=None):
+    """Generate a Voronoi rendering of the image with given parameters."""
+    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, posterize, seed)
+
+    h, w = working_img.shape[:2]
+
+    # Create output image
+    output = np.zeros_like(working_img)
+
+    for polygon, color in process_voronoi_regions(vor, chosen, working_img):
         pts = np.array(polygon, dtype=np.int32)
         cv2.fillPoly(output, [pts], color.tolist())
 
@@ -211,45 +256,16 @@ def preview_mode(img_path):
 
 def save_voronoi_output(img, output_svg, output_png, points, strength, blur, edges, posterize, scale=1.0, seed=None):
     """Save Voronoi art to SVG and PNG files."""
-    # Set random seed if provided
-    if seed is not None:
-        np.random.seed(seed)
-
-    # Apply posterization if needed
-    working_img = posterize_image(img.copy(), posterize) if posterize > 1 else img.copy()
+    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, posterize, seed)
 
     h, w = working_img.shape[:2]
-    gray = cv2.cvtColor(working_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
-
-    # Variance map
-    blur_img = cv2.GaussianBlur(gray, (0, 0), blur)
-    var = cv2.GaussianBlur(gray**2, (0, 0), blur) - blur_img**2
-    var = cv2.normalize(var, None, 0, 1, cv2.NORM_MINMAX)
-
-    # Weighted random sampling
-    weights = var * strength + 1e-3
-    weights /= weights.sum()
-    ys, xs = np.indices(var.shape)
-    coords = np.column_stack((xs.ravel(), ys.ravel()))
-    chosen = coords[np.random.choice(len(coords), size=points, p=weights.ravel())]
-
-    # Voronoi
-    vor = Voronoi(chosen)
 
     # SVG
     dwg = svgwrite.Drawing(output_svg, size=(w, h))
     stroke_color = "black" if edges else "none"
 
-    for i, region_idx in enumerate(vor.point_region):
-        region = vor.regions[region_idx]
-        if not region or -1 in region:
-            continue
-        polygon = [vor.vertices[j] for j in region if 0 <= j < len(vor.vertices)]
-        if len(polygon) < 3:
-            continue
-        px, py = map(int, chosen[i])
-        px, py = np.clip(px, 0, w - 1), np.clip(py, 0, h - 1)
-        b, g, r = working_img[int(py), int(px)]
+    for polygon, color in process_voronoi_regions(vor, chosen, working_img):
+        b, g, r = color
         dwg.add(dwg.polygon(polygon, fill=svgwrite.rgb(r, g, b), stroke=stroke_color, stroke_width=0.3 if edges else 0))
 
     dwg.save()
