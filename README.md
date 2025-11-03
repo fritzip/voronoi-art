@@ -2,6 +2,14 @@
 
 Transform images into artistic Voronoi diagrams with adaptive sampling and posterization effects. Creates vector (SVG) and raster (PNG) outputs.
 
+## Preview
+
+| Input                      | Output                                    |
+| -------------------------- | ----------------------------------------- |
+| ![Input Image](puzzle.jpg) | ![Voronoi Art Output](puzzle_voronoi.png) |
+
+_Example: Original image (left) transformed into adaptive Voronoi art (right)_
+
 ## Features
 
 - **Interactive Preview Mode**: Real-time parameter adjustment with instant visual feedback
