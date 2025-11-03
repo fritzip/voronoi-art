@@ -10,7 +10,6 @@ Transform images into artistic Voronoi diagrams with adaptive sampling and poste
 - **Vector Output**: Generates crisp SVG files that scale infinitely
 - **Flexible Scaling**: Control output resolution independently from input
 - **Universal Image Support**: Works with PNG, JPG, JPEG, BMP, TIFF, WebP, and other formats
-- **Debug Mode**: Visualize Voronoi cell boundaries
 
 ## Installation
 
@@ -84,38 +83,26 @@ voronoi-art \
 voronoi-art \
   --input portrait.png \
   --points 500 \
-  --edges \
+  --edge-color "#FF6B35" \
+  --edge-thickness 1.0 \
   --posterize 8
 ```
 
 ## Parameters
 
-| Parameter     | Type   | Default           | Description                                                       |
-| ------------- | ------ | ----------------- | ----------------------------------------------------------------- |
-| `--input`     | string | _required_        | Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.) |
-| `--output`    | string | `{input}_voronoi` | Output basename without extension                                 |
-| `--preview`   | flag   | off               | Launch interactive preview mode with real-time adjustments        |
-| `--points`    | int    | 6000              | Number of Voronoi sites (more = finer detail)                     |
-| `--strength`  | float  | 3.0               | Adaptive sampling intensity (higher = more detail emphasis)       |
-| `--blur`      | int    | 2                 | Variance map smoothness (lower = sharper transitions)             |
-| `--posterize` | int    | 0                 | Color levels (0=off, 8/16/32 for artistic effects)                |
-| `--scale`     | float  | 1.0               | Output size multiplier (2.0 = double resolution)                  |
-| `--seed`      | int    | None              | Random seed for reproducible results (0-100)                      |
-| `--edges`     | flag   | off               | Show Voronoi cell borders for debugging                           |
-
-## Examples
-
-### Natural Image (6000 points)
-
-Balanced detail preservation with adaptive sampling.
-
-### Posterized Art (500 points, 8 colors)
-
-Create bold, geometric low-poly art.
-
-### High Resolution (10000 points, 2x scale)
-
-Maximum detail for large prints.
+| Parameter          | Type   | Default           | Description                                                       |
+| ------------------ | ------ | ----------------- | ----------------------------------------------------------------- |
+| `--input`          | string | _required_        | Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.) |
+| `--output`         | string | `{input}_voronoi` | Output basename without extension                                 |
+| `--preview`        | flag   | off               | Launch interactive preview mode with real-time adjustments        |
+| `--points`         | int    | 6000              | Number of Voronoi sites (more = finer detail)                     |
+| `--strength`       | float  | 3.0               | Adaptive sampling intensity (higher = more detail emphasis)       |
+| `--blur`           | int    | 2                 | Variance map smoothness (lower = sharper transitions)             |
+| `--posterize`      | int    | 0                 | Color levels (0=off, 8/16/32 for artistic effects)                |
+| `--scale`          | float  | 1.0               | Output size multiplier (2.0 = double resolution)                  |
+| `--seed`           | int    | None              | Random seed for reproducible results (0-100)                      |
+| `--edge-color`     | string | black             | Color of Voronoi edges (named colors or hex: 'red', '#FF0000')    |
+| `--edge-thickness` | float  | 0.3               | Thickness of Voronoi edges (SVG stroke width)                     |
 
 ## How It Works
 
