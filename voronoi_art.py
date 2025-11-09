@@ -1,32 +1,14 @@
 # voronoi_art.py
 # Adaptive Voronoi vectorization with optional posterization
 
-import cv2, numpy as np, random, svgwrite, cairosvg, argparse, os, sys
+import argparse
+import cv2
+import numpy as np
+import svgwrite
+import cairosvg
+import dearpygui.dearpygui as dpg
 from scipy.spatial import Voronoi
 from pathlib import Path
-
-
-def get_color_options():
-    """Get color options list from the parse_color color_map."""
-    # Use the same color_map as parse_color for consistency
-    color_map = {
-        "black": (24, 24, 24),
-        "white": (245, 245, 245),
-        "red": (220, 50, 47),
-        "green": (38, 139, 21),
-        "blue": (38, 139, 210),
-        "yellow": (203, 153, 50),
-        "cyan": (42, 161, 152),
-        "magenta": (174, 54, 183),
-        "orange": (217, 95, 2),
-        "purple": (108, 113, 196),
-        "brown": (150, 75, 0),
-        "pink": (215, 110, 160),
-        "gray": (120, 120, 120),
-    }
-
-    # Convert to trackbar format: (display_name, rgb_tuple)
-    return [(name.title(), rgb) for name, rgb in color_map.items()]
 
 
 def parse_color(color_str):
@@ -41,10 +23,23 @@ def parse_color(color_str):
         elif len(hex_color) == 3:
             return tuple(int(c * 2, 16) for c in hex_color)
 
-    # Handle named colors - use same color definitions as get_color_options
-    color_options = get_color_options()
-    color_map = {name.lower(): rgb for name, rgb in color_options}
-    color_map["grey"] = color_map.get("gray", (120, 120, 120))  # Add grey alias
+    # Handle named colors
+    color_map = {
+        "black": (24, 24, 24),
+        "white": (245, 245, 245),
+        "red": (220, 50, 47),
+        "green": (38, 139, 21),
+        "blue": (38, 139, 210),
+        "yellow": (203, 153, 50),
+        "cyan": (42, 161, 152),
+        "magenta": (174, 54, 183),
+        "orange": (217, 95, 2),
+        "purple": (108, 113, 196),
+        "brown": (150, 75, 0),
+        "pink": (215, 110, 160),
+        "gray": (120, 120, 120),
+        "grey": (120, 120, 120),  # Alias
+    }
 
     if color_str in color_map:
         return color_map[color_str]
@@ -166,8 +161,8 @@ def generate_voronoi_image(img, points, strength, blur, posterize, edge_color=(0
     return output
 
 
-def preview_mode(img_path):
-    """Interactive preview mode with real-time parameter adjustment."""
+def preview_mode(img_path, output_svg=None, output_png=None):
+    """Interactive preview mode with real-time parameter adjustment using Dear PyGui."""
     # Load image
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     if img is None:
@@ -175,166 +170,362 @@ def preview_mode(img_path):
 
     h, w = img.shape[:2]
 
-    # For display only - we'll generate on full image but display scaled
-    max_display = 800
-    if h > max_display or w > max_display:
-        scale_factor = max_display / max(h, w)
-        display_h, display_w = int(h * scale_factor), int(w * scale_factor)
-    else:
-        display_h, display_w = h, w
-        scale_factor = 1.0
+    # Use reasonable window size for 4K and HD displays
+    window_width = 1600
+    window_height = 1000
 
-    # Create window
-    window_name = "Voronoi Art Preview - Press 'q' to quit, ENTER to save"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(window_name, display_w, display_h + 200)
+    # Calculate control panel width
+    control_panel_width = 400
 
-    # Parameters (strength: 0-10 exponential, posterize: 0-10 powers of 2, scale: 1-10, seed: 0-20)
+    # Fixed reasonable display size - no need to resize dynamically
+    # Calculate available space for preview at initial window size
+    preview_width = window_width - control_panel_width - 60  # margins and spacing
+    preview_height = window_height - 120  # title, margins, and spacing
+
+    # Scale image to fit preview area while maintaining aspect ratio
+    scale_factor = min(preview_width / w, preview_height / h)
+    display_w = int(w * scale_factor)
+    display_h = int(h * scale_factor)
+
+    # Initialize parameters
     params = {
-        "points": 6000,
-        "strength": 1,
+        "points_log": 3.0,  # Logarithmic scale: 1=10, 2=100, 3=1000, 4=10000, 5=100000
+        "strength": 1.0,
         "blur": 2,
         "posterize": 0,
-        "scale": 1,
+        "scale_log": 0.0,  # Logarithmic scale: 0=1x, 1=10x (fine 0-1, coarse 1-10)
         "seed": 0,
-        "edge_color": 0,
-        "edge_thickness": 3,
+        "edge_color": [24 / 255, 24 / 255, 24 / 255, 1.0],  # RGBA (0-1 float range for DearPyGui), default dark gray
+        "edge_thickness": 0.3,
+        "show_edges": True,
+        "needs_update": True,
     }
 
-    # Use same color palette as parse_color function
-    color_options = get_color_options()
-
-    # Create trackbars
-    cv2.createTrackbar("Points", window_name, params["points"], 100000, lambda x: None)
-    cv2.createTrackbar("Strength", window_name, params["strength"], 10, lambda x: None)
-    cv2.createTrackbar("Blur", window_name, params["blur"], 20, lambda x: None)
-    cv2.createTrackbar("Edge Color", window_name, params["edge_color"], len(color_options) - 1, lambda x: None)
-    cv2.createTrackbar("Edge Thickness", window_name, params["edge_thickness"], 20, lambda x: None)
-    cv2.createTrackbar("Posterize", window_name, params["posterize"], 10, lambda x: None)
-    cv2.createTrackbar("Scale", window_name, params["scale"], 10, lambda x: None)
-    cv2.createTrackbar("Seed", window_name, params["seed"], 20, lambda x: None)
-
-    print("\n" + "=" * 60)
-    print("VORONOI ART PREVIEW MODE")
-    print("=" * 60)
-    print("Adjust the sliders to preview different settings:")
-    print("  • Points: Number of Voronoi sites (more = finer detail)")
-    print("  • Strength: Adaptive sampling intensity (0-10, exponential scale)")
-    print("  • Blur: Variance map smoothness")
-    print("  • Edge Color: Color of cell borders")
-    print("  • Edge Thickness: Thickness of cell borders (0.1-2.0)")
-    print("  • Posterize: Color reduction (0=off, 1=2 colors, 2=4, 3=8, ..., 10=1024)")
-    print("  • Scale: Output size multiplier (1-10)")
-    print("  • Seed: Random seed for reproducible results (0-20)")
-    print("\nPress ENTER to save with current settings")
-    print("Press 'q' to quit without saving")
-    print("=" * 60 + "\n")
-
-    last_params = params.copy()
     result = None
-    needs_update = True
+    texture_tag = "preview_texture"
+    image_tag = "preview_image"
 
-    while True:
-        # Get current trackbar values
-        params["points"] = max(100, cv2.getTrackbarPos("Points", window_name))
-        params["strength"] = cv2.getTrackbarPos("Strength", window_name)
-        params["blur"] = max(1, cv2.getTrackbarPos("Blur", window_name))
-        params["edge_color"] = cv2.getTrackbarPos("Edge Color", window_name)
-        params["edge_thickness"] = cv2.getTrackbarPos("Edge Thickness", window_name)
-        params["posterize"] = cv2.getTrackbarPos("Posterize", window_name)
-        params["scale"] = max(1, cv2.getTrackbarPos("Scale", window_name))
-        params["seed"] = cv2.getTrackbarPos("Seed", window_name)
+    def update_preview():
+        """Generate and update the preview image."""
+        nonlocal result
+        params["needs_update"] = False
 
-        # Check if parameters changed
-        if params != last_params:
-            needs_update = True
-            last_params = params.copy()
+        # Convert points slider (1-5) to actual points using logarithmic scale
+        # 1 -> 10, 2 -> 100, 3 -> 1000, 4 -> 10000, 5 -> 100000
+        actual_points = int(10 ** params["points_log"])
 
-        # Generate preview
-        if needs_update:
-            # Convert strength from 0-10 scale using exponential: e^strength / e^10
-            # This gives a range from ~0 (e^0/e^10 ≈ 0.000045) to 1.0 (e^10/e^10)
-            # with more fine control at lower values
-            if params["strength"] == 0:
-                actual_strength = 0
+        # Convert strength (0-10) using exponential scale
+        if params["strength"] == 0:
+            actual_strength = 0
+        else:
+            actual_strength = np.exp(params["strength"]) / np.exp(10) * 100
+
+        # Convert posterize slider to power of 2
+        actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
+
+        # Get edge color (convert from RGBA [0-1] to BGR [0-255])
+        # DearPyGui color picker returns [R, G, B, A] in 0-1 float range
+        edge_color_bgr = (
+            int(params["edge_color"][2] * 255),  # B
+            int(params["edge_color"][1] * 255),  # G
+            int(params["edge_color"][0] * 255),  # R
+        )
+
+        # Edge thickness - use 0 if edges are disabled
+        actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
+
+        # Generate on full resolution
+        result = generate_voronoi_image(
+            img,
+            points=actual_points,
+            strength=actual_strength,
+            blur=params["blur"],
+            posterize=actual_posterize,
+            edge_color=edge_color_bgr,
+            edge_thickness=actual_edge_thickness,
+            seed=params["seed"],
+        )
+
+        # Resize for display to match texture size (fixed at initialization)
+        result_display = cv2.resize(result, (display_w, display_h))
+
+        # Convert BGR to RGBA for Dear PyGui
+        result_rgba = cv2.cvtColor(result_display, cv2.COLOR_BGR2RGBA)
+        result_rgba = result_rgba.astype(np.float32) / 255.0
+
+        # Update texture data (texture already exists with fixed size)
+        dpg.set_value(texture_tag, result_rgba.flatten())
+
+    def on_param_change(sender, app_data, user_data):
+        """Callback when any parameter changes."""
+        param_name = user_data
+        params[param_name] = app_data
+
+        # Update slider display values for logarithmic scales
+        if param_name == "points_log":
+            actual_points = int(10**app_data)
+            dpg.set_value(sender, app_data)  # Ensure value is set
+            dpg.configure_item(sender, format=f"{actual_points} points")
+        elif param_name == "scale_log":
+            if app_data <= 0:
+                actual_scale = 1.0
+            elif app_data < 1:
+                actual_scale = 10**app_data
             else:
-                actual_strength = np.exp(params["strength"]) / np.exp(10) * 100  # Scale to 0-100
+                actual_scale = app_data
+            dpg.configure_item(sender, format=f"{actual_scale:.2f}x")
 
-            # Convert posterize slider (0-10) to power of 2
-            actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
+        params["needs_update"] = True
 
-            # Get edge color from selection
-            edge_color_name, edge_color_rgb = color_options[params["edge_color"]]
-            # Convert RGB to BGR for OpenCV
-            edge_color_bgr = (edge_color_rgb[2], edge_color_rgb[1], edge_color_rgb[0])
+    def on_save():
+        """Callback when save button is clicked."""
+        if output_svg is None or output_png is None:
+            print("⚠️ No output paths specified")
+            return
 
-            # Convert edge thickness from slider (0-20) to actual thickness (0.0-2.0)
-            actual_edge_thickness = max(0.0, params["edge_thickness"] / 10.0)
+        params["needs_update"] = False  # Don't regenerate
 
-            print(
-                f"Generating preview: points={params['points']}, strength={actual_strength:.2f}, "
-                f"blur={params['blur']}, "
-                f"edge_color={edge_color_name}, edge_thickness={actual_edge_thickness:.1f}, "
-                f"posterize={actual_posterize}, scale={params['scale']}x, seed={params['seed']}"
-            )
+        # Generate the final output immediately
+        # Convert parameters
+        actual_points = int(10 ** params["points_log"])
+        actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
+        if params["strength"] == 0:
+            actual_strength = 0
+        else:
+            actual_strength = (np.exp(params["strength"]) / np.exp(10)) * 100
 
-            # Generate on FULL resolution image (same as final output)
-            result = generate_voronoi_image(
-                img,
-                points=params["points"],
-                strength=actual_strength,
-                blur=params["blur"],
-                posterize=actual_posterize,
-                edge_color=edge_color_bgr,  # Use BGR for OpenCV
-                edge_thickness=actual_edge_thickness,
-                seed=params["seed"],
-            )
+        edge_color_bgr = (
+            int(params["edge_color"][2] * 255),
+            int(params["edge_color"][1] * 255),
+            int(params["edge_color"][0] * 255),
+        )
+        actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
 
-            # Resize result for display if needed
-            if scale_factor != 1.0:
-                result_display = cv2.resize(result, (display_w, display_h))
-            else:
-                result_display = result
+        # Convert scale: 0-1 by 0.1 steps, 1-10 by 1 unit steps
+        # For 0-1: scale = 10^(scale_log)
+        # For 1-10: scale = scale_log
+        if params["scale_log"] <= 0:
+            actual_scale = 1.0
+        elif params["scale_log"] < 1:
+            actual_scale = 10 ** params["scale_log"]
+        else:
+            actual_scale = params["scale_log"]
 
-            needs_update = False
+        # Save the output
+        save_voronoi_output(
+            img,
+            output_svg,
+            output_png,
+            points=actual_points,
+            strength=actual_strength,
+            blur=params["blur"],
+            posterize=actual_posterize,
+            edge_color=edge_color_bgr,
+            edge_thickness=actual_edge_thickness,
+            scale=actual_scale,
+            seed=params["seed"],
+        )
 
-        # Display
-        if result is not None:
-            cv2.imshow(window_name, result_display)
+        # Print CLI command equivalent
+        edge_color_hex = (
+            f"#{int(params['edge_color'][0]*255):02x}{int(params['edge_color'][1]*255):02x}{int(params['edge_color'][2]*255):02x}"
+        )
+        print(f"\n📋 CLI equivalent:")
+        print(f"voronoi-art --input {img_path} --output-svg {output_svg} --output-png {output_png} \\")
+        print(f"  --points {actual_points} --strength {actual_strength:.2f} --blur {params['blur']} \\")
+        print(f"  --posterize {actual_posterize} --edge-color {edge_color_hex} \\")
+        print(f"  --edge-thickness {actual_edge_thickness:.2f} --scale {actual_scale:.2f} --seed {params['seed']}")
+        print("\n✅ Files saved! You can continue adjusting or click Quit to exit.")
 
-        # Handle keyboard
-        key = cv2.waitKey(100) & 0xFF
-        if key == ord("q"):
-            print("\n❌ Preview cancelled")
-            cv2.destroyAllWindows()
-            return None
-        elif key == 13:  # Enter key
-            cv2.destroyAllWindows()
-            # Convert posterize back to power of 2
-            actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
-            # Convert strength using exponential scale
-            if params["strength"] == 0:
-                actual_strength = 0
-            else:
-                actual_strength = (np.exp(params["strength"]) / np.exp(10)) * 100
+    def on_quit():
+        """Callback when quit button is clicked."""
+        dpg.stop_dearpygui()
 
-            # Get edge color and thickness
-            edge_color_name, edge_color_rgb = color_options[params["edge_color"]]
-            # Convert RGB to BGR for OpenCV
-            edge_color_bgr = (edge_color_rgb[2], edge_color_rgb[1], edge_color_rgb[0])
-            actual_edge_thickness = max(0.0, params["edge_thickness"] / 10.0)
+    # Initialize Dear PyGui
+    dpg.create_context()
 
-            return {
-                "points": params["points"],
-                "strength": actual_strength,
-                "blur": params["blur"],
-                "edge_color": edge_color_bgr,  # Return BGR for OpenCV consistency
-                "edge_color_name": edge_color_name,
-                "edge_thickness": actual_edge_thickness,
-                "posterize": actual_posterize,
-                "scale": params["scale"],
-                "seed": params["seed"],
-            }
+    # Set global font scale for better readability
+    font_scale = 1.5  # Good for 4K displays
+    dpg.set_global_font_scale(font_scale)
+
+    # Create texture registry
+    with dpg.texture_registry(tag="texture_registry"):
+        # Initialize with a blank image
+        blank = np.zeros((display_h, display_w, 4), dtype=np.float32)
+        dpg.add_raw_texture(
+            width=display_w,
+            height=display_h,
+            default_value=blank.flatten(),
+            format=dpg.mvFormat_Float_rgba,
+            tag=texture_tag,
+        )
+
+    # Create main window
+    with dpg.window(label="Voronoi Art Preview", tag="primary_window"):
+        with dpg.group(horizontal=True):
+            # Left panel - controls
+            with dpg.child_window(width=control_panel_width, height=-1):
+                dpg.add_text("Voronoi Parameters", color=(100, 200, 255))
+                dpg.add_separator()
+
+                dpg.add_text("Points (logarithmic, 10 to 100,000)")
+                initial_points = int(10 ** params["points_log"])
+                dpg.add_slider_float(
+                    default_value=params["points_log"],
+                    min_value=1.0,
+                    max_value=5.0,
+                    callback=on_param_change,
+                    user_data="points_log",
+                    width=-1,
+                    format=f"{initial_points} points",
+                    clamped=True,
+                )
+
+                dpg.add_text("Strength (0-10, exponential)")
+                dpg.add_slider_float(
+                    default_value=params["strength"],
+                    min_value=0,
+                    max_value=10,
+                    callback=on_param_change,
+                    user_data="strength",
+                    width=-1,
+                )
+
+                dpg.add_text("Blur (1-20)")
+                dpg.add_slider_int(
+                    default_value=params["blur"],
+                    min_value=1,
+                    max_value=20,
+                    callback=on_param_change,
+                    user_data="blur",
+                    width=-1,
+                )
+
+                dpg.add_text("Posterize (0-10, power of 2)")
+                dpg.add_slider_int(
+                    default_value=params["posterize"],
+                    min_value=0,
+                    max_value=10,
+                    callback=on_param_change,
+                    user_data="posterize",
+                    width=-1,
+                )
+
+                dpg.add_separator()
+                dpg.add_text("Edge Settings", color=(100, 200, 255))
+                dpg.add_separator()
+
+                dpg.add_checkbox(
+                    label="Show Edges",
+                    default_value=params["show_edges"],
+                    callback=on_param_change,
+                    user_data="show_edges",
+                )
+
+                dpg.add_text("Edge Color")
+                dpg.add_color_edit(
+                    default_value=params["edge_color"],
+                    callback=on_param_change,
+                    user_data="edge_color",
+                    width=-1,
+                    no_alpha=True,
+                )
+
+                dpg.add_text("Edge Thickness (0.0-2.0)")
+                dpg.add_slider_float(
+                    default_value=params["edge_thickness"],
+                    min_value=0.0,
+                    max_value=2.0,
+                    callback=on_param_change,
+                    user_data="edge_thickness",
+                    width=-1,
+                )
+
+                dpg.add_separator()
+                dpg.add_text("Output Settings", color=(100, 200, 255))
+                dpg.add_separator()
+
+                dpg.add_text("Scale (logarithmic, 1x to 10x)")
+                if params["scale_log"] <= 0:
+                    initial_scale_display = 1.0
+                elif params["scale_log"] < 1:
+                    initial_scale_display = 10 ** params["scale_log"]
+                else:
+                    initial_scale_display = params["scale_log"]
+                dpg.add_slider_float(
+                    default_value=params["scale_log"],
+                    min_value=0.0,
+                    max_value=10.0,
+                    callback=on_param_change,
+                    user_data="scale_log",
+                    width=-1,
+                    format=f"{initial_scale_display:.2f}x",
+                    clamped=True,
+                )
+
+                dpg.add_text("Random Seed (0-20)")
+                dpg.add_slider_int(
+                    default_value=params["seed"],
+                    min_value=0,
+                    max_value=20,
+                    callback=on_param_change,
+                    user_data="seed",
+                    width=-1,
+                )
+
+                dpg.add_separator()
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Save", callback=on_save, width=int(control_panel_width * 0.45))
+                    dpg.add_button(label="Quit", callback=on_quit, width=int(control_panel_width * 0.45))
+
+            # Right panel - preview (fills remaining space)
+            with dpg.child_window(width=-1, height=-1, tag="preview_panel"):
+                dpg.add_text("Preview", color=(100, 200, 255))
+                dpg.add_separator()
+                # Image - will be resized dynamically
+                dpg.add_image(texture_tag, tag=image_tag)
+
+    # Setup and show viewport
+    dpg.create_viewport(title="Voronoi Art Preview", width=window_width, height=window_height)
+    dpg.setup_dearpygui()
+    dpg.show_viewport()
+    dpg.set_primary_window("primary_window", True)
+
+    # Initial preview generation
+    update_preview()
+
+    # Main loop with resize handling
+    last_resize_size = None
+
+    while dpg.is_dearpygui_running():
+        if params["needs_update"]:
+            update_preview()
+
+        # Check if preview panel size changed and update image size accordingly
+        if dpg.does_item_exist("preview_panel") and dpg.does_item_exist(image_tag):
+            panel_size = dpg.get_item_rect_size("preview_panel")
+            if panel_size and panel_size[0] > 50 and panel_size[1] > 50:
+                # Account for title, separator, and padding
+                available_width = int(panel_size[0]) - 20
+                available_height = int(panel_size[1]) - 60
+
+                # Calculate scaled size maintaining aspect ratio
+                scale = min(available_width / display_w, available_height / display_h)
+                new_width = int(display_w * scale)
+                new_height = int(display_h * scale)
+
+                # Only update if size changed significantly (avoid constant tiny updates)
+                current_size = (new_width, new_height)
+                if last_resize_size != current_size:
+                    dpg.configure_item(image_tag, width=new_width, height=new_height)
+                    last_resize_size = current_size
+
+        dpg.render_dearpygui_frame()
+
+    # Cleanup
+    dpg.destroy_context()
+
+    return None
 
 
 def save_voronoi_output(
@@ -396,7 +587,6 @@ def main():
     p.add_argument("--points", type=int, default=6000, help="Number of Voronoi sites")
     p.add_argument("--strength", type=float, default=3.0, help="Effect of color variance on density")
     p.add_argument("--blur", type=int, default=2, help="Smoothness of variance map")
-    # Note: edges flag removed; edge visibility is controlled by --edge-thickness (0 = no edge)
     p.add_argument("--edge-color", type=str, default="black", help="Color of Voronoi edges (e.g., 'black', 'white', 'red', '#FF0000')")
     p.add_argument("--edge-thickness", type=float, default=0.3, help="Thickness of Voronoi edges for SVG output")
     p.add_argument("--posterize", type=int, default=0, help="Posterize colors (0=off, e.g., 8,16,32)")
@@ -423,26 +613,9 @@ def main():
     # Preview mode
     if args.preview:
         print("🎨 Starting preview mode...")
-        preview_params = preview_mode(IMG_PATH)
-        if preview_params is None:
-            return  # User cancelled
-
-        # Update args with preview parameters
-        args.points = preview_params["points"]
-        args.strength = preview_params["strength"]
-        args.blur = preview_params["blur"]
-        args.edge_color = preview_params["edge_color_name"].lower()
-        args.edge_thickness = preview_params["edge_thickness"]
-        args.posterize = preview_params["posterize"]
-        args.scale = preview_params["scale"]
-        args.seed = preview_params["seed"]
-
-        print(
-            f"\n📝 Saving with parameters: points={args.points}, strength={args.strength:.2f}, "
-            f"blur={args.blur}, edge_color={args.edge_color}, "
-            f"edge_thickness={args.edge_thickness:.2f}, posterize={args.posterize}, "
-            f"scale={args.scale:.2f}x, seed={args.seed}"
-        )
+        preview_mode(IMG_PATH, OUTPUT_SVG, OUTPUT_PNG)
+        # Preview mode handles saving directly via the Save button
+        return
 
     # Load image - OpenCV supports PNG, JPG, JPEG, BMP, TIFF, WebP, and more
     img = cv2.imread(IMG_PATH, cv2.IMREAD_COLOR)

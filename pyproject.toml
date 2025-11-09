@@ -17,12 +17,13 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = ">=3.8,<3.13"
 numpy = "^1.24.0"
 opencv-python = "^4.8.0"
 scipy = "^1.10.0"
 svgwrite = "^1.4.3"
 cairosvg = "^2.7.0"
+dearpygui = "^1.11.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
