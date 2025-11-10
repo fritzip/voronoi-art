@@ -1,6 +1,6 @@
 # Voronoi Art
 
-Transform images into artistic Voronoi diagrams with adaptive sampling and posterization effects. Creates vector (SVG) and raster (PNG) outputs.
+Transform images into artistic Voronoi diagrams with adaptive sampling and bounded tessellation. Creates vector (SVG) and raster (PNG) outputs with interactive preview.
 
 ## Preview
 
@@ -10,14 +10,14 @@ Transform images into artistic Voronoi diagrams with adaptive sampling and poste
 
 _Example: Original image (left) transformed into adaptive Voronoi art (right)_
 
-## Features
+## How It Works
 
-- **Interactive Preview Mode**: Real-time parameter adjustment with instant visual feedback
-- **Adaptive Sampling**: Places more Voronoi sites in high-detail areas using variance-based density
-- **Posterization**: Optional color reduction for artistic effects
-- **Vector Output**: Generates crisp SVG files that scale infinitely
-- **Flexible Scaling**: Control output resolution independently from input
-- **Universal Image Support**: Works with PNG, JPG, JPEG, BMP, TIFF, WebP, and other formats
+1. **Variance Analysis**: Calculates color variance across the image
+2. **Adaptive Sampling**: Places more Voronoi sites in high-variance (detailed) regions
+3. **Voronoi Tessellation**: Generates polygonal cells using scipy with boundary points to eliminate infinite regions
+4. **Color Sampling**: Each cell takes the color from its center point
+5. **Vector Export**: Saves as SVG
+6. **Raster Rendering**: Converts to PNG at specified scale using CairoSVG
 
 ## Installation
 
@@ -53,17 +53,17 @@ voronoi-art --input ~/pictures/photo.jpg
 # Launch interactive preview with real-time parameter adjustment
 voronoi-art --input photo.jpg --preview
 
-# Adjust sliders in the GUI window:
-#   - Points: Change number of Voronoi sites (0-100,000)
-#   - Strength: Control adaptive sampling intensity (0-10, exponential scale)
-#              0=off, 5≈0.67, 10=100 (uses e^x/e^10 scaling for fine control)
-#   - Blur: Adjust variance map smoothness (1-20)
-#   - Edges: Toggle cell borders on/off (0 or 1)
-#   - Posterize: Change color quantization (0-10: 0=off, 1=2 colors, 2=4, 3=8, ..., 10=1024)
-#   - Scale x0.1: Output size multiplier (1=0.1x, 10=1.0x, 50=5.0x, 100=10.0x)
-#   - Seed: Random seed for reproducible results (0-100)
-# Press ENTER to save with current settings
-# Press 'q' to quit without saving
+# Interactive Controls in GUI:
+#   - Points: Logarithmic slider (10 to 100,000 points)
+#   - Strength: Exponential scale (0-10, fine control over adaptive sampling)
+#   - Blur: Variance smoothness (1-20)
+#   - Show Edges: Checkbox to toggle cell borders
+#   - Edge Color: Color picker for border colors
+#   - Edge Thickness: Integer slider (0-10 pixels)
+#   - Scale: Output size multiplier (0.1x to 10x in 0.1 increments)
+#   - Random Seed: Reproducible results (0-20)
+# Click 'Save' to export with current settings
+# Click 'Quit' to exit without saving
 ```
 
 ### Basic Usage
@@ -78,12 +78,11 @@ voronoi-art --input photo.jpg
 ### Advanced Options
 
 ```bash
-# High detail with posterization and custom output
+# High detail with custom output and scaling
 voronoi-art \
   --input landscape.jpg \
   --output artistic_landscape \
   --points 10000 \
-  --posterize 16 \
   --strength 4.0 \
   --scale 2.0
 
@@ -92,8 +91,9 @@ voronoi-art \
   --input portrait.png \
   --points 500 \
   --edge-color "#FF6B35" \
-  --edge-thickness 1.0 \
-  --posterize 8
+  --edge-thickness 2 \
+  --blur 5
+
 ```
 
 ## Parameters
@@ -102,31 +102,23 @@ voronoi-art \
 | ------------------ | ------ | ----------------- | ----------------------------------------------------------------- |
 | `--input`          | string | _required_        | Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.) |
 | `--output`         | string | `{input}_voronoi` | Output basename without extension                                 |
-| `--preview`        | flag   | off               | Launch interactive preview mode with real-time adjustments        |
+| `--preview`        | flag   | off               | Launch interactive preview with real-time adjustments             |
+| `--debug`          | flag   | off               | Enable debug mode (shows debug controls and console output)       |
 | `--points`         | int    | 6000              | Number of Voronoi sites (more = finer detail)                     |
 | `--strength`       | float  | 3.0               | Adaptive sampling intensity (higher = more detail emphasis)       |
 | `--blur`           | int    | 2                 | Variance map smoothness (lower = sharper transitions)             |
-| `--posterize`      | int    | 0                 | Color levels (0=off, 8/16/32 for artistic effects)                |
 | `--scale`          | float  | 1.0               | Output size multiplier (2.0 = double resolution)                  |
-| `--seed`           | int    | None              | Random seed for reproducible results (0-100)                      |
+| `--seed`           | int    | None              | Random seed for reproducible results (0-20)                       |
 | `--edge-color`     | string | black             | Color of Voronoi edges (named colors or hex: 'red', '#FF0000')    |
-| `--edge-thickness` | float  | 0.3               | Thickness of Voronoi edges (SVG stroke width)                     |
-
-## How It Works
-
-1. **Variance Analysis**: Calculates color variance across the image
-2. **Adaptive Sampling**: Places more Voronoi sites in high-variance (detailed) regions
-3. **Voronoi Tessellation**: Generates polygonal cells using scipy
-4. **Color Sampling**: Each cell takes the color from its center point
-5. **Vector Export**: Saves as SVG with optional posterization
-6. **Raster Rendering**: Converts to PNG at specified scale using CairoSVG
+| `--edge-thickness` | float  | 1                 | Thickness of Voronoi edges in pixels (0 = no edges)               |
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.8-3.13
 - NumPy
 - OpenCV (cv2)
 - SciPy
+- Dear PyGui (for interactive preview)
 - svgwrite
 - CairoSVG
 
