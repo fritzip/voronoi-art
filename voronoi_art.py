@@ -1,5 +1,5 @@
 # voronoi_art.py
-# Adaptive Voronoi vectorization with optional posterization
+# Adaptive Voronoi vectorization
 
 import argparse
 import cv2
@@ -49,26 +49,13 @@ def parse_color(color_str):
     return (24, 24, 24)
 
 
-def posterize_image(img, n_colors):
-    """Posterize image to n_colors."""
-    if n_colors <= 1:
-        return img
-    # Simple uniform quantization
-    bins = np.linspace(0, 256, n_colors + 1)
-    quantized = np.digitize(img, bins) - 1
-    quantized = (bins[quantized] + bins[quantized + 1]) / 2
-    return quantized.astype(np.uint8)
-
-
-def compute_voronoi_data(img, points, strength, blur, posterize, seed=None):
+def compute_voronoi_data(img, points, strength, blur, seed=None):
     """Compute Voronoi tessellation data. Returns (vor, chosen, working_img)."""
     # Set random seed if provided
     if seed is not None:
         np.random.seed(seed)
 
-    # Apply posterization if needed
-    working_img = posterize_image(img.copy(), posterize) if posterize > 1 else img.copy()
-
+    working_img = img.copy()
     gray = cv2.cvtColor(working_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
     # Variance map
@@ -139,11 +126,12 @@ def process_voronoi_regions(vor, chosen, working_img):
         yield polygon, color
 
 
-def generate_voronoi_image(img, points, strength, blur, posterize, edge_color=(0, 0, 0), edge_thickness=1, seed=None):
+def generate_voronoi_image(img, points, strength, blur, edge_color=(0, 0, 0), edge_thickness=1, seed=None):
     """Generate a Voronoi rendering of the image with given parameters."""
-    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, posterize, seed)
-
-    h, w = working_img.shape[:2]
+    print(
+        f"Generating Voronoi image with {points} points, strength={strength}, blur={blur}, edge_color={edge_color}, edge_thickness={edge_thickness}, seed={seed}"
+    )
+    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, seed)
 
     # Create output image
     output = np.zeros_like(working_img)
@@ -153,9 +141,9 @@ def generate_voronoi_image(img, points, strength, blur, posterize, edge_color=(0
         cv2.fillPoly(output, [pts], color.tolist())
 
         # Draw edges if requested
-        # Draw edges when thickness > 0 (edge_thickness units are relative; scale for raster preview)
+        # Edge thickness in pixels - use directly without scaling
         if edge_thickness > 0.01:  # More strict threshold to avoid hairline edges
-            cv_thickness = max(1, int(edge_thickness * 3))  # Scale thickness for raster preview
+            cv_thickness = max(1, int(edge_thickness))
             cv2.polylines(output, [pts], True, edge_color, cv_thickness)
 
     return output
@@ -175,7 +163,7 @@ def preview_mode(img_path, output_svg=None, output_png=None):
     window_height = 1000
 
     # Calculate control panel width
-    control_panel_width = 400
+    control_panel_width = 500
 
     # Fixed reasonable display size - no need to resize dynamically
     # Calculate available space for preview at initial window size
@@ -192,8 +180,7 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         "points_log": 3.0,  # Logarithmic scale: 1=10, 2=100, 3=1000, 4=10000, 5=100000
         "strength": 1.0,
         "blur": 2,
-        "posterize": 0,
-        "scale_log": 0.0,  # Logarithmic scale: 0=1x, 1=10x (fine 0-1, coarse 1-10)
+        "scale_log": 0.0,  # Logarithmic scale: 0=0.1x, 1=1x, 2=10x
         "seed": 0,
         "edge_color": [24 / 255, 24 / 255, 24 / 255, 1.0],  # RGBA (0-1 float range for DearPyGui), default dark gray
         "edge_thickness": 0.3,
@@ -220,9 +207,6 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         else:
             actual_strength = np.exp(params["strength"]) / np.exp(10) * 100
 
-        # Convert posterize slider to power of 2
-        actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
-
         # Get edge color (convert from RGBA [0-1] to BGR [0-255])
         # DearPyGui color picker returns [R, G, B, A] in 0-1 float range
         edge_color_bgr = (
@@ -240,7 +224,6 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             points=actual_points,
             strength=actual_strength,
             blur=params["blur"],
-            posterize=actual_posterize,
             edge_color=edge_color_bgr,
             edge_thickness=actual_edge_thickness,
             seed=params["seed"],
@@ -267,12 +250,8 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             dpg.set_value(sender, app_data)  # Ensure value is set
             dpg.configure_item(sender, format=f"{actual_points} points")
         elif param_name == "scale_log":
-            if app_data <= 0:
-                actual_scale = 1.0
-            elif app_data < 1:
-                actual_scale = 10**app_data
-            else:
-                actual_scale = app_data
+            # Scale: -1 -> 0.1x, 0 -> 1x, 1 -> 10x (logarithmic)
+            actual_scale = 10**app_data
             dpg.configure_item(sender, format=f"{actual_scale:.2f}x")
 
         params["needs_update"] = True
@@ -288,7 +267,6 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         # Generate the final output immediately
         # Convert parameters
         actual_points = int(10 ** params["points_log"])
-        actual_posterize = 2 ** params["posterize"] if params["posterize"] > 0 else 0
         if params["strength"] == 0:
             actual_strength = 0
         else:
@@ -301,15 +279,8 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         )
         actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
 
-        # Convert scale: 0-1 by 0.1 steps, 1-10 by 1 unit steps
-        # For 0-1: scale = 10^(scale_log)
-        # For 1-10: scale = scale_log
-        if params["scale_log"] <= 0:
-            actual_scale = 1.0
-        elif params["scale_log"] < 1:
-            actual_scale = 10 ** params["scale_log"]
-        else:
-            actual_scale = params["scale_log"]
+        # Convert scale: logarithmic from 0.1x to 10x
+        actual_scale = 10 ** params["scale_log"]
 
         # Save the output
         save_voronoi_output(
@@ -319,22 +290,23 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             points=actual_points,
             strength=actual_strength,
             blur=params["blur"],
-            posterize=actual_posterize,
             edge_color=edge_color_bgr,
             edge_thickness=actual_edge_thickness,
             scale=actual_scale,
             seed=params["seed"],
         )
 
-        # Print CLI command equivalent
+        # Print CLI command equivalent (escape # in color to avoid shell comment)
+        # Extract output basename (remove .svg/.png extension)
+        output_basename = output_svg.replace(".svg", "") if output_svg.endswith(".svg") else output_svg
         edge_color_hex = (
             f"#{int(params['edge_color'][0]*255):02x}{int(params['edge_color'][1]*255):02x}{int(params['edge_color'][2]*255):02x}"
         )
         print(f"\n📋 CLI equivalent:")
-        print(f"voronoi-art --input {img_path} --output-svg {output_svg} --output-png {output_png} \\")
+        print(f"voronoi-art --input {img_path} --output {output_basename} \\")
         print(f"  --points {actual_points} --strength {actual_strength:.2f} --blur {params['blur']} \\")
-        print(f"  --posterize {actual_posterize} --edge-color {edge_color_hex} \\")
-        print(f"  --edge-thickness {actual_edge_thickness:.2f} --scale {actual_scale:.2f} --seed {params['seed']}")
+        print(f"  --edge-color '{edge_color_hex}' --edge-thickness {actual_edge_thickness:.2f} \\")
+        print(f"  --scale {actual_scale:.2f} --seed {params['seed']}")
         print("\n✅ Files saved! You can continue adjusting or click Quit to exit.")
 
     def on_quit():
@@ -345,7 +317,7 @@ def preview_mode(img_path, output_svg=None, output_png=None):
     dpg.create_context()
 
     # Set global font scale for better readability
-    font_scale = 1.5  # Good for 4K displays
+    font_scale = 2
     dpg.set_global_font_scale(font_scale)
 
     # Create texture registry
@@ -401,16 +373,6 @@ def preview_mode(img_path, output_svg=None, output_png=None):
                     width=-1,
                 )
 
-                dpg.add_text("Posterize (0-10, power of 2)")
-                dpg.add_slider_int(
-                    default_value=params["posterize"],
-                    min_value=0,
-                    max_value=10,
-                    callback=on_param_change,
-                    user_data="posterize",
-                    width=-1,
-                )
-
                 dpg.add_separator()
                 dpg.add_text("Edge Settings", color=(100, 200, 255))
                 dpg.add_separator()
@@ -431,11 +393,11 @@ def preview_mode(img_path, output_svg=None, output_png=None):
                     no_alpha=True,
                 )
 
-                dpg.add_text("Edge Thickness (0.0-2.0)")
+                dpg.add_text("Edge Thickness (0.0-5.0)")
                 dpg.add_slider_float(
                     default_value=params["edge_thickness"],
                     min_value=0.0,
-                    max_value=2.0,
+                    max_value=5.0,
                     callback=on_param_change,
                     user_data="edge_thickness",
                     width=-1,
@@ -445,17 +407,12 @@ def preview_mode(img_path, output_svg=None, output_png=None):
                 dpg.add_text("Output Settings", color=(100, 200, 255))
                 dpg.add_separator()
 
-                dpg.add_text("Scale (logarithmic, 1x to 10x)")
-                if params["scale_log"] <= 0:
-                    initial_scale_display = 1.0
-                elif params["scale_log"] < 1:
-                    initial_scale_display = 10 ** params["scale_log"]
-                else:
-                    initial_scale_display = params["scale_log"]
+                dpg.add_text("Scale (logarithmic, 0.1x to 10x)")
+                initial_scale_display = 10 ** params["scale_log"]
                 dpg.add_slider_float(
                     default_value=params["scale_log"],
-                    min_value=0.0,
-                    max_value=10.0,
+                    min_value=-1.0,
+                    max_value=1.0,
                     callback=on_param_change,
                     user_data="scale_log",
                     width=-1,
@@ -529,10 +486,10 @@ def preview_mode(img_path, output_svg=None, output_png=None):
 
 
 def save_voronoi_output(
-    img, output_svg, output_png, points, strength, blur, posterize, edge_color=(0, 0, 0), edge_thickness=0.3, scale=1.0, seed=None
+    img, output_svg, output_png, points, strength, blur, edge_color=(0, 0, 0), edge_thickness=0.3, scale=1.0, seed=None
 ):
     """Save Voronoi art to SVG and PNG files."""
-    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, posterize, seed)
+    vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, seed)
 
     h, w = working_img.shape[:2]
 
@@ -563,7 +520,7 @@ def save_voronoi_output(
     # PNG export - use direct OpenCV rendering when no edges to avoid transparency gaps
     if edge_thickness <= 0.01:
         # Generate PNG directly from OpenCV to avoid anti-aliasing gaps
-        output_img = generate_voronoi_image(img, points, strength, blur, posterize, edge_color, 0, seed)
+        output_img = generate_voronoi_image(img, points, strength, blur, edge_color, 0, seed)
 
         # Scale if needed
         if scale != 1.0:
@@ -580,7 +537,7 @@ def save_voronoi_output(
 
 
 def main():
-    p = argparse.ArgumentParser(description="Adaptive Voronoi vectorization with optional posterization")
+    p = argparse.ArgumentParser(description="Adaptive Voronoi vectorization")
     p.add_argument("--input", required=True, help="Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.)")
     p.add_argument("--output", required=False, default=None, help="Output basename (no extension). Defaults to input filename")
     p.add_argument("--preview", action="store_true", help="Interactive preview mode with real-time parameter adjustment")
@@ -589,7 +546,6 @@ def main():
     p.add_argument("--blur", type=int, default=2, help="Smoothness of variance map")
     p.add_argument("--edge-color", type=str, default="black", help="Color of Voronoi edges (e.g., 'black', 'white', 'red', '#FF0000')")
     p.add_argument("--edge-thickness", type=float, default=0.3, help="Thickness of Voronoi edges for SVG output")
-    p.add_argument("--posterize", type=int, default=0, help="Posterize colors (0=off, e.g., 8,16,32)")
     p.add_argument("--scale", type=float, default=1.0, help="Size multiplier relative to input (e.g. 2.0 = double size)")
     p.add_argument("--seed", type=int, default=None, help="Random seed for reproducible results (0-20)")
     args = p.parse_args()
@@ -635,8 +591,7 @@ def main():
         points=args.points,
         strength=args.strength,
         blur=args.blur,
-        posterize=args.posterize,
-        edge_color=edge_color_bgr,  # Use BGR for consistency
+        edge_color=edge_color_bgr,
         edge_thickness=args.edge_thickness,
         scale=args.scale,
         seed=args.seed,
