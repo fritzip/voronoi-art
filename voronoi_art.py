@@ -141,10 +141,8 @@ def generate_voronoi_image(img, points, strength, blur, edge_color=(0, 0, 0), ed
         cv2.fillPoly(output, [pts], color.tolist())
 
         # Draw edges if requested
-        # Edge thickness in pixels - use directly without scaling
-        if edge_thickness > 0.01:  # More strict threshold to avoid hairline edges
-            cv_thickness = max(1, int(edge_thickness))
-            cv2.polylines(output, [pts], True, edge_color, cv_thickness)
+        if edge_thickness > 0:
+            cv2.polylines(output, [pts], True, edge_color, edge_thickness)
 
     return output
 
@@ -180,10 +178,10 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         "points_log": 3.0,  # Logarithmic scale: 1=10, 2=100, 3=1000, 4=10000, 5=100000
         "strength": 1.0,
         "blur": 2,
-        "scale_log": 0.0,  # Logarithmic scale: 0=0.1x, 1=1x, 2=10x
+        "scale": 1.0,
         "seed": 0,
-        "edge_color": [24 / 255, 24 / 255, 24 / 255, 1.0],  # RGBA (0-1 float range for DearPyGui), default dark gray
-        "edge_thickness": 0.3,
+        "edge_color": [245 / 255, 24 / 255, 24 / 255],
+        "edge_thickness": 1,
         "show_edges": True,
         "needs_update": True,
     }
@@ -208,7 +206,6 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             actual_strength = np.exp(params["strength"]) / np.exp(10) * 100
 
         # Get edge color (convert from RGBA [0-1] to BGR [0-255])
-        # DearPyGui color picker returns [R, G, B, A] in 0-1 float range
         edge_color_bgr = (
             int(params["edge_color"][2] * 255),  # B
             int(params["edge_color"][1] * 255),  # G
@@ -242,6 +239,11 @@ def preview_mode(img_path, output_svg=None, output_png=None):
     def on_param_change(sender, app_data, user_data):
         """Callback when any parameter changes."""
         param_name = user_data
+
+        # Round scale to 0.1 increments
+        if param_name == "scale":
+            app_data = round(app_data * 10) / 10
+
         params[param_name] = app_data
 
         # Update slider display values for logarithmic scales
@@ -249,10 +251,11 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             actual_points = int(10**app_data)
             dpg.set_value(sender, app_data)  # Ensure value is set
             dpg.configure_item(sender, format=f"{actual_points} points")
-        elif param_name == "scale_log":
-            # Scale: -1 -> 0.1x, 0 -> 1x, 1 -> 10x (logarithmic)
-            actual_scale = 10**app_data
-            dpg.configure_item(sender, format=f"{actual_scale:.2f}x")
+        elif param_name == "scale":
+            # Calculate output dimensions
+            output_w = int(w * app_data)
+            output_h = int(h * app_data)
+            dpg.configure_item(sender, format=f"{app_data:.1f}x ({output_w}×{output_h})")
 
         params["needs_update"] = True
 
@@ -279,8 +282,8 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         )
         actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
 
-        # Convert scale: logarithmic from 0.1x to 10x
-        actual_scale = 10 ** params["scale_log"]
+        # Convert scale (now linear)
+        actual_scale = params["scale"]
 
         # Save the output
         save_voronoi_output(
@@ -386,18 +389,18 @@ def preview_mode(img_path, output_svg=None, output_png=None):
 
                 dpg.add_text("Edge Color")
                 dpg.add_color_edit(
-                    default_value=params["edge_color"],
+                    default_value=list(map(lambda x: x * 255, params["edge_color"])),
                     callback=on_param_change,
                     user_data="edge_color",
-                    width=-1,
                     no_alpha=True,
+                    width=-1,
                 )
 
-                dpg.add_text("Edge Thickness (0.0-5.0)")
-                dpg.add_slider_float(
+                dpg.add_text("Edge Thickness (0-10 pixels)")
+                dpg.add_slider_int(
                     default_value=params["edge_thickness"],
-                    min_value=0.0,
-                    max_value=5.0,
+                    min_value=0,
+                    max_value=10,
                     callback=on_param_change,
                     user_data="edge_thickness",
                     width=-1,
@@ -407,16 +410,17 @@ def preview_mode(img_path, output_svg=None, output_png=None):
                 dpg.add_text("Output Settings", color=(100, 200, 255))
                 dpg.add_separator()
 
-                dpg.add_text("Scale (logarithmic, 0.1x to 10x)")
-                initial_scale_display = 10 ** params["scale_log"]
+                dpg.add_text("Scale (0.1x to 10x, 0.1 increments)")
+                initial_output_w = int(w * params["scale"])
+                initial_output_h = int(h * params["scale"])
                 dpg.add_slider_float(
-                    default_value=params["scale_log"],
-                    min_value=-1.0,
-                    max_value=1.0,
+                    default_value=params["scale"],
+                    min_value=0.1,
+                    max_value=10.0,
                     callback=on_param_change,
-                    user_data="scale_log",
+                    user_data="scale",
                     width=-1,
-                    format=f"{initial_scale_display:.2f}x",
+                    format=f"{params['scale']:.1f}x ({initial_output_w}×{initial_output_h})",
                     clamped=True,
                 )
 
@@ -500,8 +504,8 @@ def save_voronoi_output(
         # OpenCV colors are BGR, convert to RGB for SVG
         b, g, r = color
 
-        # Only add stroke attributes when edge_thickness > 0.01 to completely avoid hairlines
-        if edge_thickness > 0.01:
+        # Only add stroke attributes when edge_thickness > 0 to completely avoid hairlines
+        if edge_thickness > 0:
             if isinstance(edge_color, tuple) and len(edge_color) == 3:
                 # edge_color is in BGR format (from OpenCV), convert to RGB for SVG
                 b_edge, g_edge, r_edge = edge_color
@@ -518,7 +522,7 @@ def save_voronoi_output(
     print(f"✅ Saved SVG: {output_svg}")
 
     # PNG export - use direct OpenCV rendering when no edges to avoid transparency gaps
-    if edge_thickness <= 0.01:
+    if edge_thickness <= 0:
         # Generate PNG directly from OpenCV to avoid anti-aliasing gaps
         output_img = generate_voronoi_image(img, points, strength, blur, edge_color, 0, seed)
 
