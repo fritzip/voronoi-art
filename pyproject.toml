@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "voronoi-art"
-version = "0.2.0"
+version = "0.3.0"
 description = "Create artistic Voronoi diagram renderings from images with adaptive sampling and posterization effects"
 authors = ["Maxime <maxime@example.com>"]
 readme = "README.md"

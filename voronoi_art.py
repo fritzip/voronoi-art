@@ -70,73 +70,268 @@ def compute_voronoi_data(img, points, strength, blur, seed=None):
     coords = np.column_stack((xs.ravel(), ys.ravel()))
     chosen = coords[np.random.choice(len(coords), size=points, p=weights.ravel())]
 
-    # Voronoi
-    vor = Voronoi(chosen)
+    # Add boundary points to eliminate infinite regions
+    # This approach is recommended in scipy.spatial.Voronoi docs for bounded diagrams
+    h, w = working_img.shape[:2]
+
+    # Create boundary points around the image perimeter
+    # Add points outside the image bounds to ensure all interior regions are finite
+    margin = max(w, h)  # 100% margin outside image bounds
+
+    boundary_points = []
+
+    # Top edge points
+    for x in np.linspace(-margin, w + margin, num=max(10, w // 50)):
+        boundary_points.append([x, -margin])
+
+    # Right edge points
+    for y in np.linspace(-margin, h + margin, num=max(10, h // 50)):
+        boundary_points.append([w + margin, y])
+
+    # Bottom edge points
+    for x in np.linspace(w + margin, -margin, num=max(10, w // 50)):
+        boundary_points.append([x, h + margin])
+
+    # Left edge points
+    for y in np.linspace(h + margin, -margin, num=max(10, h // 50)):
+        boundary_points.append([-margin, y])
+
+    # Combine interior points with boundary points
+    all_points = np.vstack([chosen, np.array(boundary_points)])
+
+    # Generate bounded Voronoi diagram
+    vor = Voronoi(all_points)
 
     return vor, chosen, working_img
 
 
-def process_voronoi_regions(vor, chosen, working_img):
-    """Process Voronoi regions and yield (polygon, color) for valid regions."""
+def clip_polygon_to_image_bounds(polygon, width, height):
+    """Clip polygon to image boundaries using Sutherland-Hodgman algorithm."""
+
+    def is_inside(point, edge_start, edge_end):
+        """Check if point is inside the edge (left side of directed line)."""
+        return (edge_end[0] - edge_start[0]) * (point[1] - edge_start[1]) >= (edge_end[1] - edge_start[1]) * (point[0] - edge_start[0])
+
+    def compute_intersection(p1, p2, edge_start, edge_end):
+        """Compute intersection of line p1-p2 with edge."""
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = edge_start
+        x4, y4 = edge_end
+
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-10:
+            return p1  # Lines are parallel, return original point
+
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        return [x1 + t * (x2 - x1), y1 + t * (y2 - y1)]
+
+    def clip_by_edge(subject_polygon, edge_start, edge_end):
+        """Clip polygon by a single edge."""
+        if not subject_polygon:
+            return []
+
+        clipped = []
+        if len(subject_polygon) == 0:
+            return clipped
+
+        prev_vertex = subject_polygon[-1]
+
+        for current_vertex in subject_polygon:
+            if is_inside(current_vertex, edge_start, edge_end):
+                if not is_inside(prev_vertex, edge_start, edge_end):
+                    # Entering - add intersection
+                    intersection = compute_intersection(prev_vertex, current_vertex, edge_start, edge_end)
+                    clipped.append(intersection)
+                # Add current vertex
+                clipped.append(current_vertex)
+            elif is_inside(prev_vertex, edge_start, edge_end):
+                # Exiting - add intersection only
+                intersection = compute_intersection(prev_vertex, current_vertex, edge_start, edge_end)
+                clipped.append(intersection)
+
+            prev_vertex = current_vertex
+
+        return clipped
+
+    # Define image boundary edges (clockwise)
+    edges = [
+        ([0, 0], [width, 0]),  # Top edge
+        ([width, 0], [width, height]),  # Right edge
+        ([width, height], [0, height]),  # Bottom edge
+        ([0, height], [0, 0]),  # Left edge
+    ]
+
+    # Start with original polygon
+    clipped_polygon = polygon[:]
+
+    # Clip against each edge
+    for edge_start, edge_end in edges:
+        clipped_polygon = clip_by_edge(clipped_polygon, edge_start, edge_end)
+        if len(clipped_polygon) == 0:
+            break  # Polygon completely clipped away
+
+    return clipped_polygon
+
+
+def get_polygon_average_color(polygon, working_img, debug=False):
+    """Calculate average color of pixels inside the polygon."""
+    if len(polygon) < 3:
+        if debug:
+            print(f"    🔸 Polygon too small ({len(polygon)} vertices), using fallback")
+        return np.array([50, 50, 50], dtype=np.uint8)  # Gray fallback
+
     h, w = working_img.shape[:2]
 
-    for i, region_idx in enumerate(vor.point_region):
+    # Create mask for the polygon
+    mask = np.zeros((h, w), dtype=np.uint8)
+    pts = np.array(polygon, dtype=np.int32)
+    cv2.fillPoly(mask, [pts], 255)
+
+    # Calculate average color using the mask
+    mask_area = np.sum(mask > 0)
+    if mask_area == 0:
+        if debug:
+            print(f"    🔸 Zero mask area, using center point fallback")
+        # Fallback to center point if polygon creates no mask
+        center_x = int(np.mean([p[0] for p in polygon]))
+        center_y = int(np.mean([p[1] for p in polygon]))
+        center_x = np.clip(center_x, 0, w - 1)
+        center_y = np.clip(center_y, 0, h - 1)
+        return working_img[center_y, center_x]
+
+    # Get mean color of masked region
+    masked_pixels = working_img[mask > 0]
+    avg_color = np.mean(masked_pixels, axis=0).astype(np.uint8)
+
+    if debug:
+        print(f"    🎨 Average color from {mask_area} pixels: {avg_color}")
+
+    return avg_color
+
+
+def process_voronoi_regions(vor, chosen, working_img, debug=False):
+    """Process Voronoi regions and yield (polygon, color, case) for valid regions.
+
+    Now uses bounded Voronoi (with boundary points), so all regions should be finite.
+
+    case is one of:
+      - 'finite'              : normal finite region (should be all regions now)
+      - 'boundary'            : region belongs to boundary point (skipped)
+      - 'empty_region'        : region list is empty (skipped)
+      - 'finite_degenerate'   : finite region with < 3 vertices (skipped)
+      - 'outside_bounds'      : region extends outside image bounds (clipped)
+    """
+    h, w = working_img.shape[:2]
+
+    # Debug counters
+    if debug:
+        debug_counts = {
+            "finite": 0,
+            "boundary": 0,
+            "empty_region": 0,
+            "finite_degenerate": 0,
+            "outside_bounds": 0,
+            "total_regions": len(vor.regions),
+            "total_points": len(chosen),
+            "total_voronoi_points": len(vor.points),
+        }
+
+    # Only process regions for the original interior points (not boundary points)
+    num_interior_points = len(chosen)
+
+    for i in range(num_interior_points):
+        region_idx = vor.point_region[i]
         region = vor.regions[region_idx]
+
+        # Case 1: Empty region
         if not region:
+            if debug:
+                debug_counts["empty_region"] += 1
+                print(f"  🔍 Point {i}: EMPTY region (region_idx={region_idx})")
             continue
 
-        # For infinite regions, filter out -1 vertices
-        is_infinite = -1 in region
-        if is_infinite:
-            valid_vertices = [j for j in region if j != -1]
-            if len(valid_vertices) < 3:
-                continue
-            polygon = [vor.vertices[j] for j in valid_vertices]
-        else:
-            polygon = [vor.vertices[j] for j in region]
-            if len(polygon) < 3:
-                continue
+        # With boundary points, all regions should be finite (no -1 vertices)
+        if -1 in region:
+            if debug:
+                print(f"  ⚠️  Point {i}: Unexpected infinite region in bounded Voronoi!")
+            continue
 
-        # Get color from center point
+        # All regions should be finite now
+        polygon = [vor.vertices[j] for j in region]
+
+        # Case 2: Finite region with too few vertices
+        if len(polygon) < 3:
+            if debug:
+                debug_counts["finite_degenerate"] += 1
+                print(f"  🔍 Point {i}: FINITE DEGENERATE region (vertices={len(polygon)})")
+            continue
+
+        # Check if polygon extends outside image bounds
+        polygon_array = np.array(polygon)
+        min_x, min_y = polygon_array.min(axis=0)
+        max_x, max_y = polygon_array.max(axis=0)
+
+        extends_outside = min_x < 0 or min_y < 0 or max_x > w or max_y > h
+
+        if extends_outside:
+            if debug:
+                print(f"  ✂️  Point {i}: Polygon extends outside bounds, clipping...")
+            # Clip to image bounds
+            clipped_polygon = clip_polygon_to_image_bounds(polygon, w, h)
+            if len(clipped_polygon) < 3:
+                if debug:
+                    debug_counts["finite_degenerate"] += 1
+                    print(f"  🔍 Point {i}: Polygon clipped to nothing ({len(clipped_polygon)} vertices)")
+                continue
+            polygon = clipped_polygon
+            case = "outside_bounds"
+            if debug:
+                debug_counts["outside_bounds"] += 1
+        else:
+            case = "finite"
+            if debug:
+                debug_counts["finite"] += 1
+
+        # Get color using center point for all regions (since they're all finite now)
         px, py = map(int, chosen[i])
         px, py = np.clip(px, 0, w - 1), np.clip(py, 0, h - 1)
+        color = working_img[int(py), int(px)]
 
-        # For infinite cells, sample color from the nearest edge
-        if is_infinite:
-            # Find which edge is closest
-            dist_to_left = px
-            dist_to_right = w - 1 - px
-            dist_to_top = py
-            dist_to_bottom = h - 1 - py
+        if debug:
+            print(f"  🎯 Point {i} ({case}): Using center point color at ({px},{py}) = {color}")
 
-            min_dist = min(dist_to_left, dist_to_right, dist_to_top, dist_to_bottom)
+        # Debug color information for problematic colors
+        if debug and np.sum(color) < 30:  # Very dark colors
+            print(f"  ⚠️  Point {i} ({case}): DARK COLOR {color}")
 
-            # Sample from that edge
-            if min_dist == dist_to_left:
-                color = working_img[py, 0]  # Left edge
-            elif min_dist == dist_to_right:
-                color = working_img[py, w - 1]  # Right edge
-            elif min_dist == dist_to_top:
-                color = working_img[0, px]  # Top edge
-            else:
-                color = working_img[h - 1, px]  # Bottom edge
-        else:
-            color = working_img[int(py), int(px)]
+        yield polygon, color, case
 
-        yield polygon, color
+    # Print debug summary
+    if debug:
+        processed = debug_counts["finite"] + debug_counts["outside_bounds"]
+        skipped = debug_counts["empty_region"] + debug_counts["finite_degenerate"]
+        print(f"\n📊 BOUNDED VORONOI PROCESSING SUMMARY:")
+        print(f"   Interior points: {debug_counts['total_points']}")
+        print(f"   Total Voronoi points (including boundary): {debug_counts['total_voronoi_points']}")
+        print(f"   Total regions: {debug_counts['total_regions']}")
+        print(f"   ✅ Processed: {processed} ({debug_counts['finite']} finite + {debug_counts['outside_bounds']} clipped)")
+        print(f"   ❌ Skipped: {skipped} ({debug_counts['empty_region']} empty + {debug_counts['finite_degenerate']} degenerate)")
+        print(f"   Processing rate: {processed/debug_counts['total_points']*100:.1f}%")
+        print(f"   🎯 No infinite regions (eliminated by boundary points)!\n")
 
 
 def generate_voronoi_image(img, points, strength, blur, edge_color=(0, 0, 0), edge_thickness=1, seed=None):
     """Generate a Voronoi rendering of the image with given parameters."""
     print(
-        f"Generating Voronoi image with {points} points, strength={strength}, blur={blur}, edge_color={edge_color}, edge_thickness={edge_thickness}, seed={seed}"
+        f"Generating Voronoi image with {points} points, strength={strength:.2f}, blur={blur}, edge_color={edge_color}, edge_thickness={edge_thickness}, seed={seed}"
     )
     vor, chosen, working_img = compute_voronoi_data(img, points, strength, blur, seed)
 
     # Create output image
     output = np.zeros_like(working_img)
 
-    for polygon, color in process_voronoi_regions(vor, chosen, working_img):
+    for polygon, color, case in process_voronoi_regions(vor, chosen, working_img, debug=False):
         pts = np.array(polygon, dtype=np.int32)
         cv2.fillPoly(output, [pts], color.tolist())
 
@@ -147,7 +342,7 @@ def generate_voronoi_image(img, points, strength, blur, edge_color=(0, 0, 0), ed
     return output
 
 
-def preview_mode(img_path, output_svg=None, output_png=None):
+def preview_mode(img_path, output_svg=None, output_png=None, debug_enabled=False):
     """Interactive preview mode with real-time parameter adjustment using Dear PyGui."""
     # Load image
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
@@ -180,11 +375,15 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         "blur": 2,
         "scale": 1.0,
         "seed": 0,
-        "edge_color": [245 / 255, 24 / 255, 24 / 255],
+        "edge_color": [24 / 255, 24 / 255, 24 / 255],
         "edge_thickness": 1,
         "show_edges": True,
         "needs_update": True,
     }
+
+    # Only add debug_draw if debug is enabled
+    if debug_enabled:
+        params["debug_draw"] = False
 
     result = None
     texture_tag = "preview_texture"
@@ -215,16 +414,25 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         # Edge thickness - use 0 if edges are disabled
         actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
 
-        # Generate on full resolution
-        result = generate_voronoi_image(
-            img,
-            points=actual_points,
-            strength=actual_strength,
-            blur=params["blur"],
-            edge_color=edge_color_bgr,
-            edge_thickness=actual_edge_thickness,
-            seed=params["seed"],
-        )
+        # Compute Voronoi data once and render here so we can draw debug overlays
+        vor, chosen, working_img = compute_voronoi_data(img, actual_points, actual_strength, params["blur"], params["seed"])
+
+        # Create output image and draw filled polygons
+        result = np.zeros_like(working_img)
+        regions_info = []  # keep polygons + case for debug overlay
+
+        # Enable debug output when debug_draw is on
+        debug_mode = params.get("debug_draw", False)
+        if debug_mode:
+            print(f"\n🔬 DEBUG MODE - Processing {actual_points} points...")
+
+        for polygon, color, case in process_voronoi_regions(vor, chosen, working_img, debug=debug_mode):
+            pts = np.array(polygon, dtype=np.int32)
+            cv2.fillPoly(result, [pts], color.tolist())
+            regions_info.append((pts, case))
+            # Draw edges if requested
+            if actual_edge_thickness > 0:
+                cv2.polylines(result, [pts], True, edge_color_bgr, actual_edge_thickness)
 
         # Resize for display to match texture size (fixed at initialization)
         result_display = cv2.resize(result, (display_w, display_h))
@@ -233,7 +441,40 @@ def preview_mode(img_path, output_svg=None, output_png=None):
         result_rgba = cv2.cvtColor(result_display, cv2.COLOR_BGR2RGBA)
         result_rgba = result_rgba.astype(np.float32) / 255.0
 
+        # If debug draw is enabled, overlay contours and seed points (on a copy)
+        if params.get("debug_draw"):
+            overlay = result.copy()
+            # Enhanced color mapping for bounded Voronoi cases (BGR)
+            color_map = {
+                "finite": (0, 255, 0),  # Green - normal finite regions
+                "outside_bounds": (0, 165, 255),  # Orange - clipped regions
+                "boundary": (128, 0, 128),  # Purple - boundary regions (shouldn't appear)
+                "empty_region": (0, 0, 255),  # Red - empty regions (skipped)
+                "finite_degenerate": (255, 0, 0),  # Blue - degenerate regions (skipped)
+            }
+
+            # Draw contours with case-specific colors and thickness
+            for pts, case in regions_info:
+                col = color_map.get(case, (255, 255, 255))  # White fallback
+                thickness = max(2, int(actual_edge_thickness + 1))  # Slightly thicker for visibility
+                cv2.polylines(overlay, [pts], True, col, thickness)
+
+            # Draw seed points (chosen) as small circles (white with black border)
+            for i, (px, py) in enumerate(chosen):
+                cx = int(np.clip(px, 0, overlay.shape[1] - 1))
+                cy = int(np.clip(py, 0, overlay.shape[0] - 1))
+                # White circle with black border for better visibility
+                cv2.circle(overlay, (cx, cy), radius=3, color=(0, 0, 0), thickness=-1)  # Black fill
+                cv2.circle(overlay, (cx, cy), radius=2, color=(255, 255, 255), thickness=-1)  # White center
+
+            result_display = cv2.resize(overlay, (display_w, display_h))
+        else:
+            # Resize for display to match texture size (fixed at initialization)
+            result_display = cv2.resize(result, (display_w, display_h))
+
         # Update texture data (texture already exists with fixed size)
+        result_rgba = cv2.cvtColor(result_display, cv2.COLOR_BGR2RGBA)
+        result_rgba = result_rgba.astype(np.float32) / 255.0
         dpg.set_value(texture_tag, result_rgba.flatten())
 
     def on_param_change(sender, app_data, user_data):
@@ -265,10 +506,7 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             print("⚠️ No output paths specified")
             return
 
-        params["needs_update"] = False  # Don't regenerate
-
-        # Generate the final output immediately
-        # Convert parameters
+        # Convert parameters for CLI equivalent output
         actual_points = int(10 ** params["points_log"])
         if params["strength"] == 0:
             actual_strength = 0
@@ -281,11 +519,23 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             int(params["edge_color"][0] * 255),
         )
         actual_edge_thickness = params["edge_thickness"] if params["show_edges"] else 0.0
-
-        # Convert scale (now linear)
         actual_scale = params["scale"]
 
-        # Save the output
+        # Print CLI command equivalent BEFORE computation (escape # in color to avoid shell comment)
+        output_basename = output_svg.replace(".svg", "") if output_svg.endswith(".svg") else output_svg
+        edge_color_hex = (
+            f"#{int(params['edge_color'][0]*255):02x}{int(params['edge_color'][1]*255):02x}{int(params['edge_color'][2]*255):02x}"
+        )
+        print(f"\n📋 CLI equivalent:")
+        print(f"voronoi-art --input {img_path} --output {output_basename} \\")
+        print(f"  --points {actual_points} --strength {actual_strength:.2f} --blur {params['blur']} \\")
+        print(f"  --edge-color '{edge_color_hex}' --edge-thickness {actual_edge_thickness:.2f} \\")
+        print(f"  --scale {actual_scale:.2f} --seed {params['seed']}")
+        print(f"\n💾 Generating files...")
+
+        params["needs_update"] = False  # Don't regenerate
+
+        # Generate and save the output
         save_voronoi_output(
             img,
             output_svg,
@@ -299,18 +549,7 @@ def preview_mode(img_path, output_svg=None, output_png=None):
             seed=params["seed"],
         )
 
-        # Print CLI command equivalent (escape # in color to avoid shell comment)
-        # Extract output basename (remove .svg/.png extension)
-        output_basename = output_svg.replace(".svg", "") if output_svg.endswith(".svg") else output_svg
-        edge_color_hex = (
-            f"#{int(params['edge_color'][0]*255):02x}{int(params['edge_color'][1]*255):02x}{int(params['edge_color'][2]*255):02x}"
-        )
-        print(f"\n📋 CLI equivalent:")
-        print(f"voronoi-art --input {img_path} --output {output_basename} \\")
-        print(f"  --points {actual_points} --strength {actual_strength:.2f} --blur {params['blur']} \\")
-        print(f"  --edge-color '{edge_color_hex}' --edge-thickness {actual_edge_thickness:.2f} \\")
-        print(f"  --scale {actual_scale:.2f} --seed {params['seed']}")
-        print("\n✅ Files saved! You can continue adjusting or click Quit to exit.")
+        print("✅ Files saved! You can continue adjusting or click Quit to exit.")
 
     def on_quit():
         """Callback when quit button is clicked."""
@@ -386,6 +625,15 @@ def preview_mode(img_path, output_svg=None, output_png=None):
                     callback=on_param_change,
                     user_data="show_edges",
                 )
+
+                # Only show debug toggle if debug is enabled
+                if debug_enabled:
+                    dpg.add_checkbox(
+                        label="Debug Regions (show contour colors & points)",
+                        default_value=params.get("debug_draw", False),
+                        callback=on_param_change,
+                        user_data="debug_draw",
+                    )
 
                 dpg.add_text("Edge Color")
                 dpg.add_color_edit(
@@ -500,7 +748,7 @@ def save_voronoi_output(
     # SVG
     dwg = svgwrite.Drawing(output_svg, size=(w, h))
 
-    for polygon, color in process_voronoi_regions(vor, chosen, working_img):
+    for polygon, color, case in process_voronoi_regions(vor, chosen, working_img, debug=False):
         # OpenCV colors are BGR, convert to RGB for SVG
         b, g, r = color
 
@@ -545,6 +793,7 @@ def main():
     p.add_argument("--input", required=True, help="Input image path (supports PNG, JPG, JPEG, BMP, TIFF, WebP, etc.)")
     p.add_argument("--output", required=False, default=None, help="Output basename (no extension). Defaults to input filename")
     p.add_argument("--preview", action="store_true", help="Interactive preview mode with real-time parameter adjustment")
+    p.add_argument("--debug", action="store_true", help="Enable debug mode (shows debug controls in preview)")
     p.add_argument("--points", type=int, default=6000, help="Number of Voronoi sites")
     p.add_argument("--strength", type=float, default=3.0, help="Effect of color variance on density")
     p.add_argument("--blur", type=int, default=2, help="Smoothness of variance map")
@@ -573,7 +822,7 @@ def main():
     # Preview mode
     if args.preview:
         print("🎨 Starting preview mode...")
-        preview_mode(IMG_PATH, OUTPUT_SVG, OUTPUT_PNG)
+        preview_mode(IMG_PATH, OUTPUT_SVG, OUTPUT_PNG, debug_enabled=args.debug)
         # Preview mode handles saving directly via the Save button
         return
 
