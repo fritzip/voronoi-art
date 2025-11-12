@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "voronoi-art"
 version = "0.3.0"
-description = "Create artistic Voronoi diagram renderings from images with adaptive sampling and posterization effects"
-authors = ["Maxime <maxime@example.com>"]
+description = "Create artistic Voronoi diagram renderings from images with adaptive sampling"
+authors = ["Maxime <maximesainlot@gmail.com>"]
 readme = "README.md"
 license = "MIT"
 homepage = "https://github.com/fritzip/voronoi-art"
