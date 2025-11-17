@@ -408,7 +408,7 @@ def preview_mode(img_path, output_svg=None, output_png=None, debug_enabled=False
     dpg.create_context()
 
     # Set global font scale for better readability
-    font_scale = 2
+    font_scale = 1
     dpg.set_global_font_scale(font_scale)
 
     # Create texture registry
